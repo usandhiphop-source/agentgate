@@ -7,7 +7,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 app.use(express.json());
 
 const METER_EVENT_NAME = process.env.STRIPE_METER_EVENT_NAME || 'agentgate_api_requests';
-const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || 'Price_1URRekGVZIWD5CdlZefzBGLi';
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || 'price_1URRekGVZIWD5CdlZefzBGLi';
 
 // 1. MACHINE DISCOVERY ENDPOINT (Agent Manifest & OpenAPI/MCP Specs)
 app.get('/.well-known/agent.json', (req, res) => {
