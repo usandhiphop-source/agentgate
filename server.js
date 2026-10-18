@@ -9,7 +9,7 @@ app.use(express.json());
 const METER_EVENT_NAME = process.env.STRIPE_METER_EVENT_NAME || 'agentgate_api_requests';
 const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || 'price_1URRekGVZIWD5CdlZefzBGLi';
 
-// 1. MACHINE DISCOVERY ENDPOINT (Agent Manifest & OpenAPI/MCP Specs)
+// 1. MACHINE DISCOVERY ENDPOINT
 app.get('/.well-known/agent.json', (req, res) => {
   res.json({
     agent_gate: "AgentGate M2M Web-Reader & Extraction Bridge",
@@ -26,47 +26,65 @@ app.get('/.well-known/agent.json', (req, res) => {
       register_agent: {
         method: "POST",
         path: "/register",
-        body: {
-          agent_name: "string (optional)"
-        }
+        body: { agent_name: "string (optional)" }
       },
       extract_url: {
         method: "POST",
         path: "/gateway",
-        body: {
-          customer_id: "string (required - cus_... ID from /register)",
-          target_url: "string (required - full https:// URL to scrape)"
+        body: { customer_id: "string (required)", target_url: "string (required)" }
+      }
+    }
+  });
+});
+
+// 2. OPENAPI SPECIFICATION ENDPOINT
+app.get('/openapi.json', (req, res) => {
+  res.json({
+    openapi: "3.1.0",
+    info: {
+      title: "AgentGate M2M Web Extractor",
+      version: "3.0.0",
+      description: "Autonomous micro-toll web extraction service for AI agents."
+    },
+    servers: [
+      { url: "https://agentgate-production-15b2.up.railway.app" }
+    ],
+    paths: {
+      "/register": {
+        post: {
+          summary: "Register an autonomous agent wallet and get a Stripe payment link.",
+          responses: { "201": { description: "Wallet provisioned." } }
+        }
+      },
+      "/gateway": {
+        post: {
+          summary: "Pay micro-toll and extract clean text from any URL.",
+          responses: { "200": { description: "Toll paid, clean text returned." } }
         }
       }
     }
   });
 });
 
-// 2. AUTO-PROVISIONING & PAYMENT LINK ENDPOINT (/register)
+// 3. AUTO-PROVISIONING & PAYMENT LINK ENDPOINT (/register)
 app.post('/register', async (req, res) => {
   try {
     const { agent_name } = req.body || {};
     const agentName = agent_name || `Autonomous-Agent-${Date.now()}`;
 
-    // Create the customer
     const customer = await stripe.customers.create({
       name: agentName,
       description: 'M2M Autonomous Agent Wallet',
-      metadata: {
-        m2m_agent: 'true',
-        registered_at: new Date().toISOString()
-      }
+      metadata: { m2m_agent: 'true', registered_at: new Date().toISOString() }
     });
 
-    // Create a Checkout Session tied to your metered price so the agent/owner can attach a card
     const session = await stripe.checkout.sessions.create({
       customer: customer.id,
       payment_method_types: ['card'],
       mode: 'subscription',
-            line_items: [{ price: STRIPE_PRICE_ID }],
-
-      success_url: `https://agentgate-production-15be.up.railway.app/gateway?success=true&customer_id=${customer.id}`,
-      cancel_url: `https://agentgate-production-15be.up.railway.app/`,
+      line_items: [{ price: STRIPE_PRICE_ID }],
+      success_url: `https://agentgate-production-15b2.up.railway.app/gateway?success=true&customer_id=${customer.id}`,
+      cancel_url: `https://agentgate-production-15b2.up.railway.app/`,
     });
 
     res.status(201).json({
@@ -77,14 +95,11 @@ app.post('/register', async (req, res) => {
       activation_url: session.url
     });
   } catch (error) {
-    res.status(400).json({
-      success: false,
-      error: error.message
-    });
+    res.status(400).json({ success: false, error: error.message });
   }
 });
 
-// 3. THE TOLLBOOTH & WEB-EXTRACTION BRIDGE (/gateway)
+// 4. THE TOLLBOOTH & WEB-EXTRACTION BRIDGE (/gateway)
 app.post('/gateway', async (req, res) => {
   const { customer_id, target_url } = req.body || {};
 
@@ -93,24 +108,17 @@ app.post('/gateway', async (req, res) => {
       success: false,
       status: "payment_required",
       code: 402,
-      message: "M2M Toll Required. Provide a valid 'customer_id' or POST to '/register' to provision an agent wallet.",
-      discovery_url: "/.well-known/agent.json"
+      message: "M2M Toll Required. Provide a valid 'customer_id' or POST to '/register'."
     });
   }
 
   if (!target_url || !target_url.startsWith('http')) {
-    return res.status(400).json({
-      success: false,
-      error: "Missing or invalid 'target_url'. Provide a full URL starting with http:// or https://."
-    });
+    return res.status(400).json({ success: false, error: "Missing or invalid 'target_url'." });
   }
 
   try {
-    // 1. Fetch and clean target URL
     const response = await fetch(target_url, {
-      headers: {
-        'User-Agent': 'AgentGate-M2M-Extractor/3.0 (+https://agentgate-production-15be.up.railway.app/.well-known/agent.json)'
-      },
+      headers: { 'User-Agent': 'AgentGate-M2M-Extractor/3.0' },
       signal: AbortSignal.timeout(8000)
     });
 
@@ -126,16 +134,11 @@ app.post('/gateway', async (req, res) => {
       .trim()
       .slice(0, 10000);
 
-    // 2. Record metered usage event in Stripe
     const meterEvent = await stripe.billing.meterEvents.create({
       event_name: METER_EVENT_NAME,
-      payload: {
-        stripe_customer_id: customer_id,
-        value: '1',
-      },
+      payload: { stripe_customer_id: customer_id, value: '1' },
     });
 
-    // 3. Respond with extracted data and toll receipt
     res.status(200).json({
       success: true,
       status: "access_granted",
@@ -155,32 +158,13 @@ app.post('/gateway', async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(402).json({
-      success: false,
-      status: "toll_or_extraction_failed",
-      error: error.message
-    });
+    res.status(402).json({ success: false, status: "toll_or_extraction_failed", error: error.message });
   }
 });
-// Root status check
-app.get('/', (req, res) => {
-  res.json({
-    service: "AgentGate M2M Web-Reader & Extraction Bridge",
-    status: "online",
-    discovery: "/.well-known/agent.json"
-  });
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`AgentGate running on port ${PORT}`));
 
 // Root status check
 app.get('/', (req, res) => {
-  res.json({
-    service: "AgentGate M2M Web-Reader & Extraction Bridge",
-    status: "online",
-    discovery: "/.well-known/agent.json"
-  });
+  res.json({ service: "AgentGate M2M Web-Reader & Extraction Bridge", status: "online" });
 });
 
 const PORT = process.env.PORT || 3000;
