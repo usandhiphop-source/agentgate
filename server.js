@@ -6,17 +6,19 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 app.use(express.json());
 
-const METER_EVENT_NAME = process.env.METER_EVENT_NAME || 'agentgate_api_requests';
+const METER_EVENT_NAME = process.env.STRIPE_METER_EVENT_NAME || 'agentgate_api_requests';
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || 'Price_1URRekGVZIWD5CdlZefzBGLi';
 
-// 1. MACHINE DISCOVERY ENDPOINT (The Highway Sign for AI Agents)
+// 1. MACHINE DISCOVERY ENDPOINT (Agent Manifest & OpenAPI/MCP Specs)
 app.get('/.well-known/agent.json', (req, res) => {
   res.json({
     agent_gate: "AgentGate M2M Web-Reader & Extraction Bridge",
-    version: "2.0.0",
+    version: "3.0.0",
     protocol: "M2M-HTTP-402",
-    description: "Instant clean-text web extraction and live URL reader for autonomous AI agents. Converts raw HTML into LLM-ready text.",
+    description: "Autonomous micro-toll web extraction for AI agents. Pass a customer_id and target_url to extract clean LLM-ready text.",
     pricing: {
-      model: "per_request_micro_toll",
+      model: "per_request_metered_billing",
+      price_id: STRIPE_PRICE_ID,
       event_name: METER_EVENT_NAME,
       currency: "usd"
     },
@@ -33,20 +35,22 @@ app.get('/.well-known/agent.json', (req, res) => {
         path: "/gateway",
         body: {
           customer_id: "string (required - cus_... ID from /register)",
-          target_url: "string (required - full https:// URL to scrape and clean)"
+          target_url: "string (required - full https:// URL to scrape)"
         }
       }
     }
   });
 });
 
-// 2. AUTO-PROVISIONING ENDPOINT (/register)
+// 2. AUTO-PROVISIONING & PAYMENT LINK ENDPOINT (/register)
 app.post('/register', async (req, res) => {
   try {
     const { agent_name } = req.body || {};
+    const agentName = agent_name || `Autonomous-Agent-${Date.now()}`;
 
+    // Create the customer
     const customer = await stripe.customers.create({
-      name: agent_name || `Autonomous-Agent-${Date.now()}`,
+      name: agentName,
       description: 'M2M Autonomous Agent Wallet',
       metadata: {
         m2m_agent: 'true',
@@ -54,11 +58,22 @@ app.post('/register', async (req, res) => {
       }
     });
 
+    // Create a Checkout Session tied to your metered price so the agent/owner can attach a card
+    const session = await stripe.checkout.sessions.create({
+      customer: customer.id,
+      payment_method_types: ['card'],
+      mode: 'subscription',
+      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+      success_url: `https://agentgate-production-15be.up.railway.app/gateway?success=true&customer_id=${customer.id}`,
+      cancel_url: `https://agentgate-production-15be.up.railway.app/`,
+    });
+
     res.status(201).json({
       success: true,
-      status: "registered",
-      message: "Agent wallet provisioned. Pass this customer_id and a target_url to /gateway.",
-      customer_id: customer.id
+      status: "registered_payment_required",
+      message: "Agent wallet provisioned. Attach a payment method via the activation_url below to authorize toll passage.",
+      customer_id: customer.id,
+      activation_url: session.url
     });
   } catch (error) {
     res.status(400).json({
@@ -72,7 +87,6 @@ app.post('/register', async (req, res) => {
 app.post('/gateway', async (req, res) => {
   const { customer_id, target_url } = req.body || {};
 
-  // Reject unverified agents with 402 Payment Required
   if (!customer_id) {
     return res.status(402).json({
       success: false,
@@ -91,30 +105,27 @@ app.post('/gateway', async (req, res) => {
   }
 
   try {
-    // 1. Fetch and clean the target webpage for the agent
+    // 1. Fetch and clean target URL
     const response = await fetch(target_url, {
       headers: {
-        'User-Agent': 'AgentGate-M2M-Extractor/2.0 (+https://agentgate-production-15be.up.railway.app/.well-known/agent.json)'
+        'User-Agent': 'AgentGate-M2M-Extractor/3.0 (+https://agentgate-production-15be.up.railway.app/.well-known/agent.json)'
       },
       signal: AbortSignal.timeout(8000)
     });
 
     const rawHtml = await response.text();
-
-    // Extract page title
     const titleMatch = rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     const pageTitle = titleMatch ? titleMatch[1].trim() : 'Untitled Page';
 
-    // Strip scripts, styles, and HTML tags into clean LLM-ready text
     const cleanText = rawHtml
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
       .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
       .replace(/<[^>]+>/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
-      .slice(0, 10000); // Cap at 10,000 characters for fast agent ingestion
+      .slice(0, 10000);
 
-    // 2. Record the micro-toll in Stripe AFTER successful extraction
+    // 2. Record metered usage event in Stripe
     const meterEvent = await stripe.billing.meterEvents.create({
       event_name: METER_EVENT_NAME,
       payload: {
@@ -123,7 +134,7 @@ app.post('/gateway', async (req, res) => {
       },
     });
 
-    // 3. Deliver the extracted data + toll receipt
+    // 3. Respond with extracted data and toll receipt
     res.status(200).json({
       success: true,
       status: "access_granted",
