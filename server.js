@@ -9,64 +9,32 @@ app.use(express.json());
 const METER_EVENT_NAME = process.env.STRIPE_METER_EVENT_NAME || 'agentgate_api_requests';
 const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || 'price_1URRekGVZIWD5CdlZefzBGLi';
 
-// 1. MACHINE DISCOVERY ENDPOINT
 app.get('/.well-known/agent.json', (req, res) => {
   res.json({
     agent_gate: "AgentGate M2M Web-Reader & Extraction Bridge",
     version: "3.0.0",
     protocol: "M2M-HTTP-402",
-    description: "Autonomous micro-toll web extraction for AI agents. Pass a customer_id and target_url to extract clean LLM-ready text.",
     pricing: {
       model: "per_request_metered_billing",
       price_id: STRIPE_PRICE_ID,
       event_name: METER_EVENT_NAME,
       currency: "usd"
-    },
-    endpoints: {
-      register_agent: {
-        method: "POST",
-        path: "/register",
-        body: { agent_name: "string (optional)" }
-      },
-      extract_url: {
-        method: "POST",
-        path: "/gateway",
-        body: { customer_id: "string (required)", target_url: "string (required)" }
-      }
     }
   });
 });
 
-// 2. OPENAPI SPECIFICATION ENDPOINT
 app.get('/openapi.json', (req, res) => {
   res.json({
     openapi: "3.1.0",
-    info: {
-      title: "AgentGate M2M Web Extractor",
-      version: "3.0.0",
-      description: "Autonomous micro-toll web extraction service for AI agents."
-    },
-    servers: [
-      { url: "https://agentgate-production-15b2.up.railway.app" }
-    ],
+    info: { title: "AgentGate M2M Web Extractor", version: "3.0.0" },
+    servers: [{ url: "https://agentgate-production-15b2.up.railway.app" }],
     paths: {
-      "/register": {
-        post: {
-          summary: "Register an autonomous agent wallet and get a Stripe payment link.",
-          responses: { "201": { description: "Wallet provisioned." } }
-        }
-      },
-      "/gateway": {
-        post: {
-          summary: "Pay micro-toll and extract clean text from any URL.",
-          responses: { "200": { description: "Toll paid, clean text returned." } }
-        }
-      }
+      "/register": { post: { summary: "Register agent wallet" } },
+      "/gateway": { post: { summary: "Extract URL content" } }
     }
   });
 });
 
-// 3. AUTO-PROVISIONING & PAYMENT LINK ENDPOINT (/register)
 app.post('/register', async (req, res) => {
   try {
     const { agent_name } = req.body || {};
@@ -74,8 +42,7 @@ app.post('/register', async (req, res) => {
 
     const customer = await stripe.customers.create({
       name: agentName,
-      description: 'M2M Autonomous Agent Wallet',
-      metadata: { m2m_agent: 'true', registered_at: new Date().toISOString() }
+      description: 'M2M Autonomous Agent Wallet'
     });
 
     const session = await stripe.checkout.sessions.create({
@@ -90,7 +57,6 @@ app.post('/register', async (req, res) => {
     res.status(201).json({
       success: true,
       status: "registered_payment_required",
-      message: "Agent wallet provisioned. Attach a payment method via the activation_url below to authorize toll passage.",
       customer_id: customer.id,
       activation_url: session.url
     });
@@ -99,21 +65,15 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// 4. THE TOLLBOOTH & WEB-EXTRACTION BRIDGE (/gateway)
 app.post('/gateway', async (req, res) => {
   const { customer_id, target_url } = req.body || {};
 
   if (!customer_id) {
-    return res.status(402).json({
-      success: false,
-      status: "payment_required",
-      code: 402,
-      message: "M2M Toll Required. Provide a valid 'customer_id' or POST to '/register'."
-    });
+    return res.status(402).json({ success: false, status: "payment_required", code: 402 });
   }
 
   if (!target_url || !target_url.startsWith('http')) {
-    return res.status(400).json({ success: false, error: "Missing or invalid 'target_url'." });
+    return res.status(400).json({ success: false, error: "Invalid target_url" });
   }
 
   try {
@@ -142,27 +102,14 @@ app.post('/gateway', async (req, res) => {
     res.status(200).json({
       success: true,
       status: "access_granted",
-      message: "Metered event recorded. URL extracted.",
-      toll_receipt: {
-        event_id: meterEvent.identifier,
-        customer_id: customer_id,
-        units_billed: 1,
-        timestamp: new Date().toISOString()
-      },
-      extracted_data: {
-        url: target_url,
-        http_status: response.status,
-        title: pageTitle,
-        content_length: cleanText.length,
-        clean_text: cleanText
-      }
+      toll_receipt: { event_id: meterEvent.identifier, units_billed: 1 },
+      extracted_data: { url: target_url, title: pageTitle, clean_text: cleanText }
     });
   } catch (error) {
-    res.status(402).json({ success: false, status: "toll_or_extraction_failed", error: error.message });
+    res.status(402).json({ success: false, status: "toll_failed", error: error.message });
   }
 });
 
-// Root status check
 app.get('/', (req, res) => {
   res.json({ service: "AgentGate M2M Web-Reader & Extraction Bridge", status: "online" });
 });
