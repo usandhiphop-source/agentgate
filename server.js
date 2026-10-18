@@ -162,6 +162,17 @@ app.post('/gateway', async (req, res) => {
     });
   }
 });
+// Root status check
+app.get('/', (req, res) => {
+  res.json({
+    service: "AgentGate M2M Web-Reader & Extraction Bridge",
+    status: "online",
+    discovery: "/.well-known/agent.json"
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`AgentGate running on port ${PORT}`));
 
 // Root status check
 app.get('/', (req, res) => {
