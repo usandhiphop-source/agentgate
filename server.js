@@ -63,7 +63,8 @@ app.post('/register', async (req, res) => {
       customer: customer.id,
       payment_method_types: ['card'],
       mode: 'subscription',
-      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+            line_items: [{ price: STRIPE_PRICE_ID }],
+
       success_url: `https://agentgate-production-15be.up.railway.app/gateway?success=true&customer_id=${customer.id}`,
       cancel_url: `https://agentgate-production-15be.up.railway.app/`,
     });
