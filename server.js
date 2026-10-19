@@ -115,4 +115,10 @@ app.get('/', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+app.get('/.well-known/glama.json', (req, res) => {
+  res.json({
+    "$schema": "https://glama.ai/mcp/schemas/connector.json",
+    "claim": "glama_claim_PQLFXmVfkhqAn4n9dNbVmsunPEBgKAEn"
+  });
+});
 app.listen(PORT, () => console.log(`AgentGate running on port ${PORT}`));
