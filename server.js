@@ -1,124 +1,180 @@
 const express = require('express');
-const Stripe = require('stripe');
+const cors = require('cors');
 
 const app = express();
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
+app.use(cors());
 app.use(express.json());
 
-const METER_EVENT_NAME = process.env.STRIPE_METER_EVENT_NAME || 'agentgate_api_requests';
-const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || 'price_1URRekGVZIWD5CdlZefzBGLi';
+const PORT = process.env.PORT || 8080;
 
-app.get('/.well-known/agent.json', (req, res) => {
-  res.json({
-    agent_gate: "AgentGate M2M Web-Reader & Extraction Bridge",
-    version: "3.0.0",
-    protocol: "M2M-HTTP-402",
-    pricing: {
-      model: "per_request_metered_billing",
-      price_id: STRIPE_PRICE_ID,
-      event_name: METER_EVENT_NAME,
-      currency: "usd"
-    }
-  });
-});
-
-app.get('/openapi.json', (req, res) => {
-  res.json({
-    openapi: "3.1.0",
-    info: { title: "AgentGate M2M Web Extractor", version: "3.0.0" },
-    servers: [{ url: "https://agentgate-production-15b2.up.railway.app" }],
-    paths: {
-      "/register": { post: { summary: "Register agent wallet" } },
-      "/gateway": { post: { summary: "Extract URL content" } }
-    }
-  });
-});
-
-app.post('/register', async (req, res) => {
-  try {
-    const { agent_name } = req.body || {};
-    const agentName = agent_name || `Autonomous-Agent-${Date.now()}`;
-
-    const customer = await stripe.customers.create({
-      name: agentName,
-      description: 'M2M Autonomous Agent Wallet'
-    });
-
-    const session = await stripe.checkout.sessions.create({
-      customer: customer.id,
-      payment_method_types: ['card'],
-      mode: 'subscription',
-      line_items: [{ price: STRIPE_PRICE_ID }],
-      success_url: `https://agentgate-production-15b2.up.railway.app/gateway?success=true&customer_id=${customer.id}`,
-      cancel_url: `https://agentgate-production-15b2.up.railway.app/`,
-    });
-
-    res.status(201).json({
-      success: true,
-      status: "registered_payment_required",
-      customer_id: customer.id,
-      activation_url: session.url
-    });
-  } catch (error) {
-    res.status(400).json({ success: false, error: error.message });
-  }
-});
-
-app.post('/gateway', async (req, res) => {
-  const { customer_id, target_url } = req.body || {};
-
-  if (!customer_id) {
-    return res.status(402).json({ success: false, status: "payment_required", code: 402 });
-  }
-
-  if (!target_url || !target_url.startsWith('http')) {
-    return res.status(400).json({ success: false, error: "Invalid target_url" });
-  }
-
-  try {
-    const response = await fetch(target_url, {
-      headers: { 'User-Agent': 'AgentGate-M2M-Extractor/3.0' },
-      signal: AbortSignal.timeout(8000)
-    });
-
-    const rawHtml = await response.text();
-    const titleMatch = rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    const pageTitle = titleMatch ? titleMatch[1].trim() : 'Untitled Page';
-
-    const cleanText = rawHtml
-      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
-      .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 10000);
-
-    const meterEvent = await stripe.billing.meterEvents.create({
-      event_name: METER_EVENT_NAME,
-      payload: { stripe_customer_id: customer_id, value: '1' },
-    });
-
-    res.status(200).json({
-      success: true,
-      status: "access_granted",
-      toll_receipt: { event_id: meterEvent.identifier, units_billed: 1 },
-      extracted_data: { url: target_url, title: pageTitle, clean_text: cleanText }
-    });
-  } catch (error) {
-    res.status(402).json({ success: false, status: "toll_failed", error: error.message });
-  }
-});
-
-app.get('/', (req, res) => {
-  res.json({ service: "AgentGate M2M Web-Reader & Extraction Bridge", status: "online" });
-});
-
-const PORT = process.env.PORT || 3000;
+// 1. Glama Ownership Verification Route
 app.get('/.well-known/glama.json', (req, res) => {
-  res.json({
+  res.status(200).json({
     "$schema": "https://glama.ai/mcp/schemas/connector.json",
     "claim": "glama_claim_PQLFXmVfkhqAn4n9dNbVmsunPEBgKAEn"
   });
 });
-app.listen(PORT, () => console.log(`AgentGate running on port ${PORT}`));
+
+// 2. OpenAPI Specification (GET Root & /openapi.json)
+const openApiSpec = {
+  openapi: "3.1.0",
+  info: {
+    title: "AgentGate M2M Web Extractor",
+    version: "3.0.0"
+  },
+  servers: [
+    { url: "https://agentgate-production-15b2.up.railway.app" }
+  ],
+  paths: {
+    "/register": {
+      post: { summary: "Register agent wallet" }
+    },
+    "/gateway": {
+      post: { summary: "Extract URL content" }
+    }
+  }
+};
+
+app.get('/', (req, res) => {
+  res.status(200).json(openApiSpec);
+});
+
+app.get('/openapi.json', (req, res) => {
+  res.status(200).json(openApiSpec);
+});
+
+// 3. Existing REST Endpoints
+app.post('/register', (req, res) => {
+  const { wallet } = req.body || {};
+  res.status(200).json({
+    status: "registered",
+    wallet: wallet || "anonymous-agent",
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.post('/gateway', async (req, res) => {
+  const { url } = req.body || {};
+  if (!url) {
+    return res.status(400).json({ error: "Missing 'url' parameter" });
+  }
+  try {
+    const response = await fetch(url);
+    const text = await response.text();
+    res.status(200).json({
+      status: "success",
+      url,
+      content: text.substring(0, 10000)
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to extract URL", details: err.message });
+  }
+});
+
+// 4. MCP JSON-RPC Handler (Supports both '/' and '/mcp' for Glama Health Checks)
+const handleMcpRequest = async (req, res) => {
+  const { method, id, params } = req.body || {};
+
+  if (method === 'initialize') {
+    return res.status(200).json({
+      jsonrpc: "2.0",
+      id,
+      result: {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: {
+          name: "AgentGate M2M Web Extractor",
+          version: "3.0.0"
+        }
+      }
+    });
+  }
+
+  if (method === 'notifications/initialized') {
+    return res.status(200).end();
+  }
+
+  if (method === 'tools/list') {
+    return res.status(200).json({
+      jsonrpc: "2.0",
+      id,
+      result: {
+        tools: [
+          {
+            name: "register_agent_wallet",
+            description: "Register agent wallet with AgentGate",
+            inputSchema: {
+              type: "object",
+              properties: {
+                wallet: { type: "string", description: "Agent wallet address" }
+              },
+              required: ["wallet"]
+            }
+          },
+          {
+            name: "extract_url_content",
+            description: "Extract webpage content via AgentGate M2M gateway",
+            inputSchema: {
+              type: "object",
+              properties: {
+                url: { type: "string", description: "Target URL to extract" }
+              },
+              required: ["url"]
+            }
+          }
+        ]
+      }
+    });
+  }
+
+  if (method === 'tools/call') {
+    const toolName = params?.name;
+    const args = params?.arguments || {};
+
+    if (toolName === 'register_agent_wallet') {
+      return res.status(200).json({
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [{ type: "text", text: `Wallet ${args.wallet || 'agent'} registered.` }]
+        }
+      });
+    }
+
+    if (toolName === 'extract_url_content') {
+      try {
+        const response = await fetch(args.url);
+        const text = await response.text();
+        return res.status(200).json({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [{ type: "text", text: text.substring(0, 5000) }]
+          }
+        });
+      } catch (err) {
+        return res.status(200).json({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            isError: true,
+            content: [{ type: "text", text: `Extraction error: ${err.message}` }]
+          }
+        });
+      }
+    }
+  }
+
+  return res.status(200).json({
+    jsonrpc: "2.0",
+    id: id || null,
+    result: {}
+  });
+};
+
+app.post('/', handleMcpRequest);
+app.post('/mcp', handleMcpRequest);
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`AgentGate MCP & REST Server running on port ${PORT}`);
+});
