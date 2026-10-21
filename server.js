@@ -4,14 +4,29 @@ const Stripe = require('stripe');
 const app = express();
 app.use(express.json());
 
-// Initialize Stripe using your Railway Environment Variables
-const stripe = process.env.STRIPE_SECRET_KEY
-  ? new Stripe(process.env.STRIPE_SECRET_KEY)
-  : null;
+// Auto-detect your Railway variables (even if named METER_EVENT_NAME or STRIPE_SECRET_KEY)
+const stripeKey =
+  process.env.STRIPE_SECRET_KEY ||
+  process.env.STRIPE_API_KEY ||
+  process.env.STRIPE_KEY ||
+  Object.values(process.env).find(v => typeof v === 'string' && (v.startsWith('rk_live_') || v.startsWith('sk_live_')));
 
-const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || 'price_1URRekGVZIWD5CdlZefzBGLi';
-const STRIPE_METER_EVENT_NAME = process.env.STRIPE_METER_EVENT_NAME || 'agentgate_extraction';
-const PUBLIC_URL = process.env.PUBLIC_URL || 'https://agentgate-production-15b2.up.railway.app';
+const stripe = stripeKey ? new Stripe(stripeKey.trim()) : null;
+
+const STRIPE_PRICE_ID =
+  process.env.STRIPE_PRICE_ID ||
+  process.env.PRICE_ID ||
+  'price_1URRekGVZIWD5CdlZefzBGLi';
+
+const STRIPE_METER_EVENT_NAME =
+  process.env.STRIPE_METER_EVENT_NAME ||
+  process.env.METER_EVENT_NAME ||
+  process.env.METER_NAME ||
+  'agentgate_api_requests';
+
+const PUBLIC_URL = process.env.RAILWAY_PUBLIC_DOMAIN
+  ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+  : (process.env.PUBLIC_URL || 'https://agentgate-production-15b2.up.railway.app');
 
 // Built-in CORS headers
 app.use((req, res, next) => {
@@ -77,7 +92,7 @@ function isSafePublicUrl(rawUrl) {
 
 // Helper: Find Stripe Customer by Wallet Address & Check Active Subscription
 async function getVerifiedStripeCustomer(wallet) {
-  if (!stripe) throw new Error('Stripe is not configured on the server.');
+  if (!stripe) throw new Error('Stripe API key is missing in Railway environment variables.');
   const cleanWallet = String(wallet).trim();
 
   const search = await stripe.customers.search({
@@ -404,6 +419,8 @@ const handleMcp = async (req, res) => {
               service: "AgentGate M2M Web Extractor",
               version: "3.2.0",
               billing_engine: stripe ? "stripe_metered_active" : "stripe_missing_key",
+              meter_event: STRIPE_METER_EVENT_NAME,
+              price_id: STRIPE_PRICE_ID,
               ...(args.verbose ? { timestamp: new Date().toISOString(), uptime_seconds: Math.floor(process.uptime()) } : {})
             })
           }]
@@ -431,7 +448,7 @@ const handleMcp = async (req, res) => {
         const response = await fetch(args.url);
         const text = await response.text();
 
-        // Bill 1 Metered Extraction Unit to Customer in Stripe
+        // Bill 1 Metered Extraction Unit (agentgate_api_requests) to Customer in Stripe
         await recordStripeMeterUsage(customer.id);
 
         return res.status(200).json({
@@ -545,3 +562,4 @@ app.post('/gateway', async (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
 });
+          
