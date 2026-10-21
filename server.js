@@ -16,6 +16,35 @@ app.use((req, res, next) => {
 
 const PORT = process.env.PORT || 8080;
 
+// Security Helper: SSRF & Internal Network Protection
+function isSafePublicUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    // 1. Only allow standard web traffic
+    if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+
+    const host = parsed.hostname.toLowerCase();
+    // 2. Block localhost and internal cloud metadata/private IPs
+    if (
+      host === 'localhost' ||
+      host === '0.0.0.0' ||
+      host === '[::1]' ||
+      host.startsWith('127.') ||
+      host.startsWith('10.') ||
+      host.startsWith('192.168.') ||
+      host.startsWith('169.254.') ||
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host) ||
+      host.endsWith('.internal') ||
+      host.endsWith('.local')
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // 1. Glama Ownership Verification Route
 app.get('/.well-known/glama.json', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
@@ -237,6 +266,9 @@ const handleMcp = async (req, res) => {
     if (toolName === 'extract_url_content') {
       const maxLen = args.max_length || 5000;
       try {
+        if (!isSafePublicUrl(args.url)) {
+          throw new Error("Blocked: Only public HTTP/HTTPS URLs are permitted.");
+        }
         const response = await fetch(args.url);
         const text = await response.text();
         return res.status(200).json({
@@ -301,6 +333,9 @@ app.post('/register', (req, res) => {
 app.post('/gateway', async (req, res) => {
   const { url } = req.body || {};
   if (!url) return res.status(400).json({ error: "Missing 'url' parameter" });
+  if (!isSafePublicUrl(url)) {
+    return res.status(403).json({ error: "Blocked: Only public HTTP/HTTPS URLs are permitted." });
+  }
   try {
     const response = await fetch(url);
     const text = await response.text();
@@ -313,3 +348,4 @@ app.post('/gateway', async (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
 });
+          
